@@ -1,0 +1,119 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d14aa88..1e0a79c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -5,7 +5,7 @@ enable_language(Fortran)
+ list( APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake )
+ find_package(F2PY REQUIRED)
+ find_package(PythonLibs REQUIRED)
+-find_package(Python3 REQUIRED COMPONENTS NumPy)
++find_package(Python3 REQUIRED COMPONENTS Development NumPy)
+ find_package( OpenMP COMPONENTS Fortran )
+ find_package( NetCDF REQUIRED COMPONENTS Fortran)
+ include_directories(${PYTHON_INCLUDE_DIRS})
+diff --git a/pyCRTM.py b/pyCRTM.py
+index 16fd7cc..77af8db 100644
+--- a/pyCRTM.py
++++ b/pyCRTM.py
+@@ -347,7 +347,8 @@ class pyCRTM:
+                                            self.profiles.surfaceTypes[:,3], 
+                                            self.profiles.surfaceTypes[:,4], 
+                                            self.profiles.surfaceTypes[:,5], 
+-                                           self.nThreads )
++                                           self.nThreads,
++					   True)
+         elif(self.Active):
+             
+             #print(pycrtm.wrap_forward_active.__doc__) 
+diff --git a/pycrtm.f90 b/pycrtm.f90
+index 0a91cf4..c9e16f7 100644
+--- a/pycrtm.f90
++++ b/pycrtm.f90
+@@ -27,7 +27,7 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
+                         traceConcLayers, trace_IDs, & 
+                         climatology, & 
+                         surfaceTemperatures, surfaceFractions, LAI, salinity,  windSpeed10m, windDirection10m, & 
+-                        landType, soilType, vegType, waterType, snowType, iceType, nthreads, &  
++                        landType, soilType, vegType, waterType, snowType, iceType, nthreads, silent, &  
+                         outTb )      
+ 
+   ! ============================================================================
+@@ -69,6 +69,7 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
+   INTEGER,      INTENT(IN) :: landType(N_Profiles), soilType(N_Profiles), vegType(N_Profiles), waterType(N_Profiles)
+   INTEGER,      INTENT(IN) :: snowType(N_Profiles), iceType(N_Profiles) 
+   INTEGER,      INTENT(IN) :: nthreads
++  LOGICAL,      INTENT(IN) :: silent
+   
+   REAL(KIND=8), INTENT(OUT) :: outTb(N_Profiles,nChan) 
+   CHARACTER(len=256), DIMENSION(1) :: sensor_id
+@@ -117,9 +118,11 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
+   ! Program header
+   ! --------------
+   CALL CRTM_Version( Version )
+-  CALL Program_Message( SUBROUTINE_NAME, &
+-    'Running simulation.', &
+-    'CRTM Version: '//TRIM(Version) )
++  IF (.not. silent) THEN
++     CALL Program_Message( SUBROUTINE_NAME, &
++       'Running simulation.', &
++       'CRTM Version: '//TRIM(Version) )
++  END IF
+ 
+   IF (.not. allocated(emissivityReflectivity)) THEN
+     IF ( output_emissivity_flag ) THEN
+@@ -160,13 +163,16 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
+                                      Channel_Subset = channel_subset)
+       IF(err_stat /= 0 ) write(*,*)'error specifying channel subset'
+   END IF
+-  WRITE( *,'(/5x,"Initializing the CRTM...")' )
++  IF (.not. silent) THEN
++      WRITE( *,'(/5x,"Initializing the CRTM...")' )
++  END IF
+ 
+   ! 4b. Output some channel information
+   ! -----------------------------------
+   n_channels = CRTM_ChannelInfo_n_Channels(chinfo(1))
+-  WRITE( *,'(/5x,"Processing a total of ",i0," channels...")' ) n_channels
+-
++  IF (.not. silent) THEN
++      WRITE( *,'(/5x,"Processing a total of ",i0," channels...")' ) n_channels
++  END IF
+ 
+   ! ============================================================================
+ 
+@@ -326,10 +332,16 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
+   ! ==========================================================================
+   ! 10. **** DESTROY THE CRTM ****
+   !
+-  WRITE( *, '( /5x, "Destroying the CRTM..." )' )
++
++  IF (.not. silent) THEN
++      WRITE( *, '( /5x, "Destroying the CRTM..." )' )
++  END IF
++
+   err_stat = CRTM_Destroy( chinfo )
+   CALL check_allocate_status(err_stat, 'Error Destroying the CRTM')
+-  write(*,*)'wrap_forward done!'
++  IF (.not. silent) THEN
++      write(*,*)'wrap_forward done!'
++  END IF
+ 
+ end SUBROUTINE wrap_forward
+ 
+diff --git a/setup.cfg b/setup.cfg
+index 3098294..13cf575 100644
+--- a/setup.cfg
++++ b/setup.cfg
+@@ -1,9 +1,9 @@
+ [Setup]
+ # Specify the location of the crtm install
+-crtm_install =/Users/karpob/pycrtm/ext/CRTMv3/build/
++crtm_install =/root/crtm/build
+ link_from_source_to_path_used = True
+ [Coefficients]
+ # source specify coefficient directory will grab little endian binary coefficients and netcdf and link them to path_used
+-source_path =/Users/karpob/pycrtm/ext/CRTMv3/build/test_data/
++source_path = /root/crtm-coefficients
+ # path used by pycrtm to read coefficients
+-path_used =/Users/karpob/pycrtm/ext/crtm_coefficients
++path_used = /root/crtm-coefficients
