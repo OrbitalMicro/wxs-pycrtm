@@ -27,7 +27,7 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
                         traceConcLayers, trace_IDs, & 
                         climatology, & 
                         surfaceTemperatures, surfaceFractions, LAI, salinity,  windSpeed10m, windDirection10m, & 
-                        landType, soilType, vegType, waterType, snowType, iceType, nthreads, &  
+                        landType, soilType, vegType, waterType, snowType, iceType, nthreads, silent, &  
                         outTb )      
 
   ! ============================================================================
@@ -69,6 +69,7 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
   INTEGER,      INTENT(IN) :: landType(N_Profiles), soilType(N_Profiles), vegType(N_Profiles), waterType(N_Profiles)
   INTEGER,      INTENT(IN) :: snowType(N_Profiles), iceType(N_Profiles) 
   INTEGER,      INTENT(IN) :: nthreads
+  LOGICAL,      INTENT(IN) :: silent
   
   REAL(KIND=8), INTENT(OUT) :: outTb(N_Profiles,nChan) 
   CHARACTER(len=256), DIMENSION(1) :: sensor_id
@@ -117,9 +118,11 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
   ! Program header
   ! --------------
   CALL CRTM_Version( Version )
-  CALL Program_Message( SUBROUTINE_NAME, &
-    'Running simulation.', &
-    'CRTM Version: '//TRIM(Version) )
+  IF (.not. silent) THEN
+     CALL Program_Message( SUBROUTINE_NAME, &
+       'Running simulation.', &
+       'CRTM Version: '//TRIM(Version) )
+  END IF
 
   IF (.not. allocated(emissivityReflectivity)) THEN
     IF ( output_emissivity_flag ) THEN
@@ -160,13 +163,16 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
                                      Channel_Subset = channel_subset)
       IF(err_stat /= 0 ) write(*,*)'error specifying channel subset'
   END IF
-  WRITE( *,'(/5x,"Initializing the CRTM...")' )
+  IF (.not. silent) THEN
+      WRITE( *,'(/5x,"Initializing the CRTM...")' )
+  END IF
 
   ! 4b. Output some channel information
   ! -----------------------------------
   n_channels = CRTM_ChannelInfo_n_Channels(chinfo(1))
-  WRITE( *,'(/5x,"Processing a total of ",i0," channels...")' ) n_channels
-
+  IF (.not. silent) THEN
+      WRITE( *,'(/5x,"Processing a total of ",i0," channels...")' ) n_channels
+  END IF
 
   ! ============================================================================
 
@@ -326,10 +332,16 @@ SUBROUTINE wrap_forward( coefficientPath, Algorithm, sensor_id_in, channel_subse
   ! ==========================================================================
   ! 10. **** DESTROY THE CRTM ****
   !
-  WRITE( *, '( /5x, "Destroying the CRTM..." )' )
+
+  IF (.not. silent) THEN
+      WRITE( *, '( /5x, "Destroying the CRTM..." )' )
+  END IF
+
   err_stat = CRTM_Destroy( chinfo )
   CALL check_allocate_status(err_stat, 'Error Destroying the CRTM')
-  write(*,*)'wrap_forward done!'
+  IF (.not. silent) THEN
+      write(*,*)'wrap_forward done!'
+  END IF
 
 end SUBROUTINE wrap_forward
 

@@ -347,7 +347,8 @@ class pyCRTM:
                                            self.profiles.surfaceTypes[:,3], 
                                            self.profiles.surfaceTypes[:,4], 
                                            self.profiles.surfaceTypes[:,5], 
-                                           self.nThreads )
+                                           self.nThreads,
+					   True)
         elif(self.Active):
             
             #print(pycrtm.wrap_forward_active.__doc__) 
