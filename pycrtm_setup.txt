@@ -1,0 +1,9 @@
+[Setup]
+# Specify the location of the crtm install
+crtm_install =/root/crtm/build
+link_from_source_to_path_used = True
+[Coefficients]
+# source specify coefficient directory will grab little endian binary coefficients and netcdf and link them to path_used
+source_path = /root/crtm-coefficients
+# path used by pycrtm to read coefficients
+path_used = /root/crtm-coefficients

@@ -1,0 +1,46 @@
+{
+    "name": "pycrtm",
+    "build": {
+        "dockerfile": "../Dockerfile",
+        "args": {
+            "COEF_TAR": "fix_REL-2.4.0.tgz"
+        }
+    },
+    "initializeCommand": "./Get_CRTM_Binary_Files.sh",
+    "mounts": [
+        "source=${localEnv:DATA},target=/root/work/data,type=bind",
+        "source=${localEnv:POETRY_CONFIG},target=/root/.config/pypoetry,type=bind",
+        "source=${localEnv:CDSAPI_CONFIG},target=/root/.cdsapirc,type=bind"
+    ],
+    "remoteUser": "root",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/root/work,type=bind",
+    "workspaceFolder": "/root/work",
+    "postStartCommand": "git apply 0001-Modifications-for-pygems-pseudodata.patch; cp setup.cfg pycrtm_/pycrtm_setup.txt", // use ';' to continue if the patch was already applied
+    "postAttachCommand": "poetry install --all-extras --all-groups",
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ms-python.python@2025.12.0",
+                "charliermarsh.ruff",
+                "h5web.vscode-h5web",
+                "tamasfe.even-better-toml",
+                "ms-toolsai.jupyter@2025.7.0"
+            ],
+            "settings": {
+                "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python",
+                "python.linting.enabled": true,
+                "python.formatting.provider": "ruff",
+                "editor.formatOnSave": true,
+                "editor.codeActionsOnSave": {
+                    "source.organizeImports": "always"
+                },
+                "python.analysis.exclude": [
+                    "**/build/"
+                ],
+                "files.exclude": {
+                    "**/build": true
+                }
+            }
+        }
+    }
+}

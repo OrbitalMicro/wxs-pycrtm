@@ -1,0 +1,675 @@
+From a1824917b6a129008ce34f282547a35e0585308b Mon Sep 17 00:00:00 2001
+From: Robert Belter <robert.belter@orbitalmicro.com>
+Date: Thu, 25 Aug 2022 07:47:09 -0600
+Subject: [PATCH] Fix download link for binary files
+
+Add patch files for GEMS2 support
+---
+ .gitignore                                    |   4 +
+ Get_CRTM_Binary_Files.sh                      |   0
+ src/CRTM_Parameters.f90                       |   2 +-
+ src/Coefficients/CRTM_SpcCoeff.f90            |  54 +++---
+ .../SpcCoeff/SpcCoeff_Binary_IO.f90           |  92 +++++++---
+ src/Coefficients/SpcCoeff/SpcCoeff_Define.f90 |  24 ++-
+ .../SensorInfo/SensorInfo_Parameters.f90      |  27 ++-
+ src/SfcOptics/CRTM_SfcOptics.f90              | 157 +++++++++++++++++-
+ test/CMakeLists.txt                           |   2 +-
+ 9 files changed, 307 insertions(+), 55 deletions(-)
+ create mode 100644 .gitignore
+ mode change 100644 => 100755 Get_CRTM_Binary_Files.sh
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 00000000..f65776d2
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,4 @@
++fix/*
++fix*.tgz
++build/*
++*.mod
+\ No newline at end of file
+diff --git a/Get_CRTM_Binary_Files.sh b/Get_CRTM_Binary_Files.sh
+old mode 100644
+new mode 100755
+diff --git a/src/CRTM_Parameters.f90 b/src/CRTM_Parameters.f90
+index 763a8ef2..769232f4 100644
+--- a/src/CRTM_Parameters.f90
++++ b/src/CRTM_Parameters.f90
+@@ -276,7 +276,7 @@ MODULE CRTM_Parameters
+   
+  
+   !#----------------------------------------------------------------------------#
+-  !#            -- GOCART Aerosol Parameters                      --            #
++  !#            -- CRTM Aerosol Parameters                        --            #
+   !#----------------------------------------------------------------------------#
+   INTEGER, PUBLIC, PARAMETER ::        INVALID_AEROSOL = 0
+   INTEGER, PUBLIC, PARAMETER ::           DUST_AEROSOL = 1
+diff --git a/src/Coefficients/CRTM_SpcCoeff.f90 b/src/Coefficients/CRTM_SpcCoeff.f90
+index db21ee78..fe307d41 100644
+--- a/src/Coefficients/CRTM_SpcCoeff.f90
++++ b/src/Coefficients/CRTM_SpcCoeff.f90
+@@ -28,22 +28,24 @@ MODULE CRTM_SpcCoeff
+   ! ----------------
+   ! Module use
+   USE Message_Handler      , ONLY: SUCCESS, FAILURE, WARNING, Display_Message
+-  USE SensorInfo_Parameters, ONLY: N_POLARIZATION_TYPES   , &
+-                                   INVALID_POLARIZATION   , &
+-                                   UNPOLARIZED            , &
+-                                   INTENSITY              , &
+-                                   FIRST_STOKES_COMPONENT , &
+-                                   SECOND_STOKES_COMPONENT, &
+-                                   THIRD_STOKES_COMPONENT , &
+-                                   FOURTH_STOKES_COMPONENT, &
+-                                   VL_POLARIZATION        , &
+-                                   HL_POLARIZATION        , &
+-                                   plus45L_POLARIZATION   , &
+-                                   minus45L_POLARIZATION  , &
+-                                   VL_MIXED_POLARIZATION  , &
+-                                   HL_MIXED_POLARIZATION  , &
+-                                   RC_POLARIZATION        , &
+-                                   LC_POLARIZATION        , &
++  USE SensorInfo_Parameters, ONLY: N_POLARIZATION_TYPES    , &
++                                   INVALID_POLARIZATION    , &
++                                   UNPOLARIZED             , &
++                                   INTENSITY               , &
++                                   FIRST_STOKES_COMPONENT  , &
++                                   SECOND_STOKES_COMPONENT , &
++                                   THIRD_STOKES_COMPONENT  , &
++                                   FOURTH_STOKES_COMPONENT , &
++                                   VL_POLARIZATION         , &
++                                   HL_POLARIZATION         , &
++                                   plus45L_POLARIZATION    , &
++                                   minus45L_POLARIZATION   , &
++                                   VL_MIXED_POLARIZATION   , &
++                                   HL_MIXED_POLARIZATION   , &
++                                   RC_POLARIZATION         , &
++                                   LC_POLARIZATION         , &
++                                   CONST_MIXED_POLARIZATION, &
++                                   PRA_POLARIZATION        , &
+                                    POLARIZATION_TYPE_NAME 
+   USE SpcCoeff_Define      , ONLY: SpcCoeff_type               , &
+                                    SpcCoeff_Associated         , &
+@@ -54,7 +56,7 @@ MODULE CRTM_SpcCoeff
+                                    SpcCoeff_IsInfraredSensor   , &
+                                    SpcCoeff_IsVisibleSensor    , &
+                                    SpcCoeff_IsUltravioletSensor
+-  USE SpcCoeff_Binary_IO   , ONLY: SpcCoeff_Binary_ReadFile
++  USE SpcCoeff_Binary_IO          , ONLY: SpcCoeff_Binary_ReadFile 
+   USE CRTM_Parameters      , ONLY: CRTM_Set_Max_nChannels  , &
+                                    CRTM_Reset_Max_nChannels
+   ! Disable all implicit typing
+@@ -95,7 +97,9 @@ MODULE CRTM_SpcCoeff
+   PUBLIC :: VL_MIXED_POLARIZATION  
+   PUBLIC :: HL_MIXED_POLARIZATION  
+   PUBLIC :: RC_POLARIZATION        
+-  PUBLIC :: LC_POLARIZATION        
++  PUBLIC :: LC_POLARIZATION  
++  PUBLIC :: CONST_MIXED_POLARIZATION
++  PUBLIC :: PRA_POLARIZATION
+   PUBLIC :: POLARIZATION_TYPE_NAME
+   
+ 
+@@ -129,6 +133,7 @@ CONTAINS
+ !       Error_Status = CRTM_Load_SpcCoeff( &
+ !                        Sensor_ID                            , &
+ !                        File_Path         = File_Path        , &
++!                        netCDF            = netCDF           , &   
+ !                        Quiet             = Quiet            , &
+ !                        Process_ID        = Process_ID       , &
+ !                        Output_Process_ID = Output_Process_ID  )
+@@ -154,6 +159,13 @@ CONTAINS
+ !                           DIMENSION:  Scalar
+ !                           ATTRIBUTES: INTENT(IN), OPTIONAL
+ !
++!       netCDF:             Set this logical argument to read in the SpcCoeff
++!                           coefficients from a netCDF format file.
++!                           UNITS:      N/A
++!                           TYPE:       LOGICAL
++!                           DIMENSION:  Scalar
++!                           ATTRIBUTES: INTENT(IN), OPTIONAL
++!
+ !       Quiet:              Set this logical argument to suppress INFORMATION
+ !                           messages being printed to stdout
+ !                           If == .FALSE., INFORMATION messages are OUTPUT [DEFAULT].
+@@ -203,7 +215,7 @@ CONTAINS
+ 
+   FUNCTION CRTM_SpcCoeff_Load( &
+     Sensor_ID        , &  ! Input
+-    File_Path        , &  ! Optional input
++    File_Path        , &  ! Optional input 
+     Quiet            , &  ! Optional input
+     Process_ID       , &  ! Optional input
+     Output_Process_ID) &  ! Optional input
+@@ -261,11 +273,11 @@ CONTAINS
+ 
+     ! Read the SpcCoeff data files
+     DO n = 1, n_Sensors
+-      spccoeff_file = TRIM(path)//TRIM(ADJUSTL(Sensor_ID(n)))//'.SpcCoeff.bin'
++      spccoeff_file = TRIM(ADJUSTL(path))//TRIM(ADJUSTL(Sensor_ID(n)))//'.SpcCoeff.bin'
+       err_stat = SpcCoeff_Binary_ReadFile( &
+         spccoeff_file      , &
+         SC(n)              , &
+-        Quiet = .NOT. noisy  )
++        Quiet = .NOT. noisy )
+       IF ( err_stat /= SUCCESS ) THEN
+         WRITE( msg,'("Error reading SpcCoeff file #",i0,", ",a)') n, TRIM(spccoeff_file)
+         CALL Display_Message( ROUTINE_NAME, TRIM(msg)//TRIM(pid_msg), err_stat ); RETURN
+diff --git a/src/Coefficients/SpcCoeff/SpcCoeff_Binary_IO.f90 b/src/Coefficients/SpcCoeff/SpcCoeff_Binary_IO.f90
+index 6b5ebd05..1a1a5d84 100644
+--- a/src/Coefficients/SpcCoeff/SpcCoeff_Binary_IO.f90
++++ b/src/Coefficients/SpcCoeff/SpcCoeff_Binary_IO.f90
+@@ -397,18 +397,42 @@ CONTAINS
+       CALL Read_Cleanup(); RETURN
+     END IF
+     ! ...Read the channel data
+-    READ( fid, IOSTAT=io_stat, IOMSG=io_msg ) &
+-      SpcCoeff%Sensor_Channel            , &
+-      SpcCoeff%Polarization              , &
+-      SpcCoeff%Channel_Flag              , &
+-      SpcCoeff%Frequency                 , &
+-      SpcCoeff%Wavenumber                , &
+-      SpcCoeff%Planck_C1                 , &
+-      SpcCoeff%Planck_C2                 , &
+-      SpcCoeff%Band_C1                   , &
+-      SpcCoeff%Band_C2                   , &
+-      SpcCoeff%Cosmic_Background_Radiance, &
+-      SpcCoeff%Solar_Irradiance
++    IF( dummy%Version > 2 ) THEN
++      ! Binary coefficient version 3 introduced for TROPICS instrument.
++      ! The SpcCoeff coefficients contain 'PolAngle' as an additional
++      ! array.
++      READ ( fid, IOSTAT=io_stat, IOMSG=io_msg ) &
++        SpcCoeff%Sensor_Channel            , &
++        SpcCoeff%Polarization              , &
++        SpcCoeff%PolAngle                  , &
++        SpcCoeff%Channel_Flag              , &
++        SpcCoeff%Frequency                 , &
++        SpcCoeff%Wavenumber                , &
++        SpcCoeff%Planck_C1                 , &
++        SpcCoeff%Planck_C2                 , &
++        SpcCoeff%Band_C1                   , &
++        SpcCoeff%Band_C2                   , &
++        SpcCoeff%Cosmic_Background_Radiance, &
++        SpcCoeff%Solar_Irradiance
++    ELSE IF( dummy%Version < 3 ) THEN
++      ! Version 2 is the default binary SpcCoeff version for 
++      ! REL-2.4.0 and older.
++      READ ( fid, IOSTAT=io_stat, IOMSG=io_msg ) &
++        SpcCoeff%Sensor_Channel            , &
++        SpcCoeff%Polarization              , &
++        SpcCoeff%Channel_Flag              , &
++        SpcCoeff%Frequency                 , &
++        SpcCoeff%Wavenumber                , &
++        SpcCoeff%Planck_C1                 , &
++        SpcCoeff%Planck_C2                 , &
++        SpcCoeff%Band_C1                   , &
++        SpcCoeff%Band_C2                   , &
++        SpcCoeff%Cosmic_Background_Radiance, &
++        SpcCoeff%Solar_Irradiance
++    ELSE
++        msg = 'Unrecognized SpcCoeff version. '//TRIM(io_msg)
++        CALL Read_Cleanup(); RETURN
++    END IF
+     IF ( io_stat /= 0 ) THEN
+       msg = 'Error reading channel data. '//TRIM(io_msg)
+       CALL Read_Cleanup(); RETURN
+@@ -639,18 +663,38 @@ CONTAINS
+       CALL Write_Cleanup(); RETURN
+     END IF
+     ! ...Write the channel data
+-    WRITE( fid, IOSTAT=io_stat ) &
+-      SpcCoeff%Sensor_Channel            , &
+-      SpcCoeff%Polarization              , &
+-      SpcCoeff%Channel_Flag              , &
+-      SpcCoeff%Frequency                 , &
+-      SpcCoeff%Wavenumber                , &
+-      SpcCoeff%Planck_C1                 , &
+-      SpcCoeff%Planck_C2                 , &
+-      SpcCoeff%Band_C1                   , &
+-      SpcCoeff%Band_C2                   , &
+-      SpcCoeff%Cosmic_Background_Radiance, &
+-      SpcCoeff%Solar_Irradiance             
++    IF(SpcCoeff%Version > 2) THEN
++      WRITE( fid, IOSTAT=io_stat ) &
++          SpcCoeff%Sensor_Channel            , &
++          SpcCoeff%Polarization              , &
++          SpcCoeff%PolAngle                  , &
++          SpcCoeff%Channel_Flag              , &
++          SpcCoeff%Frequency                 , &
++          SpcCoeff%Wavenumber                , &
++          SpcCoeff%Planck_C1                 , &
++          SpcCoeff%Planck_C2                 , &
++          SpcCoeff%Band_C1                   , &
++          SpcCoeff%Band_C2                   , &
++          SpcCoeff%Cosmic_Background_Radiance, &
++          SpcCoeff%Solar_Irradiance 
++    ELSE IF(SpcCoeff%Version < 3) THEN
++      WRITE( fid, IOSTAT=io_stat ) &
++          SpcCoeff%Sensor_Channel            , &
++          SpcCoeff%Polarization              , &
++          SpcCoeff%Channel_Flag              , &
++          SpcCoeff%Frequency                 , &
++          SpcCoeff%Wavenumber                , &
++          SpcCoeff%Planck_C1                 , &
++          SpcCoeff%Planck_C2                 , &
++          SpcCoeff%Band_C1                   , &
++          SpcCoeff%Band_C2                   , &
++          SpcCoeff%Cosmic_Background_Radiance, &
++          SpcCoeff%Solar_Irradiance      
++    ELSE
++      WRITE( msg,'("Unrecognized SpcCoeff Version. Version = ",i0)' ) &
++          SpcCoeff%Version
++      CALL Write_Cleanup(); RETURN
++    END IF       
+     IF ( io_stat /= 0 ) THEN
+       WRITE( msg,'("Error writing channel data. IOSTAT = ",i0)' ) io_stat
+       CALL Write_Cleanup(); RETURN
+diff --git a/src/Coefficients/SpcCoeff/SpcCoeff_Define.f90 b/src/Coefficients/SpcCoeff/SpcCoeff_Define.f90
+index c42298ef..a46fb5bd 100644
+--- a/src/Coefficients/SpcCoeff/SpcCoeff_Define.f90
++++ b/src/Coefficients/SpcCoeff/SpcCoeff_Define.f90
+@@ -9,7 +9,14 @@
+ !       Written by:     Paul van Delst, 18-Mar-2002
+ !                       paul.vandelst@noaa.gov
+ !
+-
++! MODIFICATION HISTORY:
++! =====================
++!
++! Author:          Date:          Description:
++! =======          =====          ============
++! Patrick Stegmann 2021-01-22     Added SpcCoeff_type%PolAngle for the TROPICS
++!                                 instrument polarization scheme in SfcOptics.
++!
+ MODULE SpcCoeff_Define
+ 
+   ! -----------------
+@@ -46,8 +53,10 @@ MODULE SpcCoeff_Define
+                                    minus45L_POLARIZATION   , &
+                                    VL_MIXED_POLARIZATION   , &
+                                    HL_MIXED_POLARIZATION   , &
++                                   CONST_MIXED_POLARIZATION, &
+                                    RC_POLARIZATION         , &
+                                    LC_POLARIZATION         , &
++                                   PRA_POLARIZATION        , &
+                                    POLARIZATION_TYPE_NAME
+   USE ACCoeff_Define       , ONLY: ACCoeff_type          , &
+                                    OPERATOR(==)          , &
+@@ -162,6 +171,7 @@ MODULE SpcCoeff_Define
+     ! Channel data arrays
+     INTEGER(Long), ALLOCATABLE :: Sensor_Channel(:)              ! L
+     INTEGER(Long), ALLOCATABLE :: Polarization(:)                ! L
++    REAL(Double),  ALLOCATABLE :: PolAngle(:)                    ! L, Units: [deg]
+     INTEGER(Long), ALLOCATABLE :: Channel_Flag(:)                ! L
+     REAL(Double) , ALLOCATABLE :: Frequency(:)                   ! L
+     REAL(Double) , ALLOCATABLE :: Wavenumber(:)                  ! L
+@@ -309,6 +319,7 @@ CONTAINS
+     ! Perform the allocation
+     ALLOCATE( SpcCoeff%Sensor_Channel( n_Channels ),             &
+               SpcCoeff%Polarization( n_Channels ),               &
++              SpcCoeff%PolAngle( n_Channels ),                   &
+               SpcCoeff%Channel_Flag( n_Channels ),               &
+               SpcCoeff%Frequency( n_Channels ),                  &
+               SpcCoeff%Wavenumber( n_Channels ),                 &
+@@ -328,6 +339,7 @@ CONTAINS
+     ! ...Arrays
+     SpcCoeff%Sensor_Channel             = 0
+     SpcCoeff%Polarization               = INVALID_POLARIZATION
++    SpcCoeff%PolAngle                   = ZERO
+     SpcCoeff%Channel_Flag               = 0
+     SpcCoeff%Frequency                  = ZERO
+     SpcCoeff%Wavenumber                 = ZERO
+@@ -390,6 +402,11 @@ CONTAINS
+         WRITE(*,'(5x,"Channel ",i0,": ",a)') SpcCoeff%Sensor_Channel(n), &
+                                              POLARIZATION_TYPE_NAME(SpcCoeff%Polarization(n))
+       END DO
++      WRITE(*,*) "Fixed Polarization Angle: "
++      DO n = 1, SpcCoeff%n_Channels
++        WRITE(*,'(3x,"Channel ",i0,": ")') SpcCoeff%Sensor_Channel(n)
++        WRITE(*,'(es22.15)') SpcCoeff%PolAngle(n)
++      END DO
+     END IF
+     WRITE(*,'(3x,"Channel_Flag               :")')
+     WRITE(*,'(3(1x,b32.32,:))') SpcCoeff%Channel_Flag
+@@ -653,6 +670,7 @@ CONTAINS
+     ! ...and now extract the subset
+     SC_Subset%Sensor_Channel             = SpcCoeff%Sensor_Channel(idx)
+     SC_Subset%Polarization               = SpcCoeff%Polarization(idx)
++    SC_Subset%PolAngle                   = SpcCoeff%PolAngle(idx)
+     SC_Subset%Channel_Flag               = SpcCoeff%Channel_Flag(idx)
+     SC_Subset%Frequency                  = SpcCoeff%Frequency(idx)
+     SC_Subset%Wavenumber                 = SpcCoeff%Wavenumber(idx)
+@@ -776,7 +794,8 @@ CONTAINS
+       ch2 = ch1 + SC_Array(i)%n_Channels - 1
+       
+       SpcCoeff%Sensor_Channel(ch1:ch2)             = SC_Array(i)%Sensor_Channel            
+-      SpcCoeff%Polarization(ch1:ch2)               = SC_Array(i)%Polarization 
++      SpcCoeff%Polarization(ch1:ch2)               = SC_Array(i)%Polarization
++      SpcCoeff%PolAngle(ch1:ch2)                   = SC_Array(i)%PolAngle
+       SpcCoeff%Channel_Flag(ch1:ch2)               = SC_Array(i)%Channel_Flag 
+       SpcCoeff%Frequency(ch1:ch2)                  = SC_Array(i)%Frequency    
+       SpcCoeff%Wavenumber(ch1:ch2)                 = SC_Array(i)%Wavenumber   
+@@ -1504,6 +1523,7 @@ CONTAINS
+     ! ...Arrays
+     IF ( ALL(x%Sensor_Channel                 ==    y%Sensor_Channel            ) .AND. &
+          ALL(x%Polarization                   ==    y%Polarization              ) .AND. &
++         ALL(x%PolAngle                       ==    y%PolAngle                  ) .AND. &
+          ALL(x%Channel_Flag                   ==    y%Channel_Flag              ) .AND. &
+          ALL(x%Frequency                  .EqualTo. y%Frequency                 ) .AND. &
+          ALL(x%Wavenumber                 .EqualTo. y%Wavenumber                ) .AND. &
+diff --git a/src/InstrumentInfo/SensorInfo/SensorInfo_Parameters.f90 b/src/InstrumentInfo/SensorInfo/SensorInfo_Parameters.f90
+index 7990da2d..2a964a0e 100644
+--- a/src/InstrumentInfo/SensorInfo/SensorInfo_Parameters.f90
++++ b/src/InstrumentInfo/SensorInfo/SensorInfo_Parameters.f90
+@@ -1,3 +1,18 @@
++!
++! SensorInfo_Parameters.f90
++!
++! Description:
++! ============
++!
++! 
++! Record of Revisions:
++! ====================
++!
++! Date:          Author:                  Description:
++! =====          =======                  ============
++! 2021-08-31     Patrick Stegmann         Added PRA_POLARIZATION.
++!
++!
+ MODULE SensorInfo_Parameters
+ 
+   ! -----------------
+@@ -40,8 +55,10 @@ MODULE SensorInfo_Parameters
+   PUBLIC :: minus45L_POLARIZATION  
+   PUBLIC :: VL_MIXED_POLARIZATION  
+   PUBLIC :: HL_MIXED_POLARIZATION  
++  PUBLIC :: CONST_MIXED_POLARIZATION
+   PUBLIC :: RC_POLARIZATION        
+-  PUBLIC :: LC_POLARIZATION        
++  PUBLIC :: LC_POLARIZATION       
++  PUBLIC :: PRA_POLARIZATION
+   PUBLIC :: POLARIZATION_TYPE_NAME
+ 
+ 
+@@ -66,7 +83,7 @@ MODULE SensorInfo_Parameters
+                           'Ultraviolet' /)
+ 
+   ! The polarisation flags
+-  INTEGER, PARAMETER :: N_POLARIZATION_TYPES    = 12
++  INTEGER, PARAMETER :: N_POLARIZATION_TYPES    = 14
+   INTEGER, PARAMETER :: INVALID_POLARIZATION    = 0
+   INTEGER, PARAMETER :: UNPOLARIZED             = 1
+   INTEGER, PARAMETER :: INTENSITY               = UNPOLARIZED
+@@ -82,6 +99,8 @@ MODULE SensorInfo_Parameters
+   INTEGER, PARAMETER :: HL_MIXED_POLARIZATION   = 10
+   INTEGER, PARAMETER :: RC_POLARIZATION         = 11
+   INTEGER, PARAMETER :: LC_POLARIZATION         = 12
++  INTEGER, PARAMETER :: CONST_MIXED_POLARIZATION= 13
++  INTEGER, PARAMETER :: PRA_POLARIZATION        = 14
+   CHARACTER(*), PARAMETER, DIMENSION( 0:N_POLARIZATION_TYPES ) :: &
+     POLARIZATION_TYPE_NAME = (/ 'Invalid                                          ', &
+                                 'Unpolarized/Intensity/First Stokes component (I) ', &
+@@ -95,7 +114,9 @@ MODULE SensorInfo_Parameters
+                                 'Vertical polarization at nadir; mixed off nadir  ', &
+                                 'Horizontal polarization at nadir; mixed off nadir', &
+                                 'Right circular polarization                      ', &
+-                                'Left circular polarization                       ' /)
++                                'Left circular polarization                       ', &
++                                'Mixed polarization with constant mixing angle    ', &
++                                'Polarization rotation angle                      '/)
+ 
+ 
+ END MODULE SensorInfo_Parameters
+diff --git a/src/SfcOptics/CRTM_SfcOptics.f90 b/src/SfcOptics/CRTM_SfcOptics.f90
+index 7452874f..09b82242 100644
+--- a/src/SfcOptics/CRTM_SfcOptics.f90
++++ b/src/SfcOptics/CRTM_SfcOptics.f90
+@@ -1,4 +1,4 @@
+-!
++
+ ! CRTM_SfcOptics
+ !
+ ! Module to compute the surface optical properties required for
+@@ -11,6 +11,16 @@
+ !                       Paul van Delst, CIMSS/SSEC;      paul.vandelst@ssec.wisc.edu
+ !                       02-Apr-2004
+ !
++! MODIFICATION HISTORY:
++! =====================
++!
++! Author:          Date:          Description:
++! =======          =====          ============
++! Patrick Stegmann 2021-01-22     Added CONST_MIXED_POLARIZATION scheme.
++! 
++! Patrick Stegmann 2021-08-31     Added PRA_POLARIZATION scheme for GEMS-1.
++!
++!
+ 
+ MODULE CRTM_SfcOptics
+ 
+@@ -39,7 +49,9 @@ MODULE CRTM_SfcOptics
+                                       VL_MIXED_POLARIZATION, &
+                                       HL_MIXED_POLARIZATION, &
+                                       RC_POLARIZATION, &
+-                                      LC_POLARIZATION
++                                      LC_POLARIZATION, &
++                                      CONST_MIXED_POLARIZATION, &
++                                      PRA_POLARIZATION
+   USE CRTM_Surface_Define,      ONLY: CRTM_Surface_type
+   USE CRTM_GeometryInfo_Define, ONLY: CRTM_GeometryInfo_type
+   USE CRTM_SfcOptics_Define,    ONLY: CRTM_SfcOptics_type      , &
+@@ -461,6 +473,10 @@ CONTAINS
+     INTEGER :: i
+     INTEGER :: nL, nZ
+     REAL(fp) :: SIN2_Angle
++    REAL(fp) :: pv
++    REAL(fp) :: ph
++    REAL(fp) :: phi
++    REAL(fp) :: theta_f
+     REAL(fp), DIMENSION(SfcOptics%n_Angles,MAX_N_STOKES) :: Emissivity
+     REAL(fp), DIMENSION(SfcOptics%n_Angles,MAX_N_STOKES, &
+                         SfcOptics%n_Angles,MAX_N_STOKES) :: Reflectivity
+@@ -715,7 +731,52 @@ CONTAINS
+             CASE ( LC_POLARIZATION )
+               SfcOptics%Emissivity(1:nZ,1)          = Emissivity(1:nZ,1)
+               SfcOptics%Reflectivity(1:nZ,1,1:nZ,1) = Reflectivity(1:nZ,1,1:nZ,1)
+-
++            !
++            ! Description:
++            ! ============
++            ! Polarization mixing with constant offset angle for TROPICS
++            !
++            ! Reference:
++            ! ==========
++            ! Leslie, V. (2020): TROPICS Polarization Description, 20 November 2020.
++            ! (Personal Communication)
++            ! 
++            CASE ( CONST_MIXED_POLARIZATION )
++              SIN2_Angle = (GeometryInfo%Distance_Ratio * &
++                           SIN(DEGREES_TO_RADIANS*SC(SensorIndex)%PolAngle(ChannelIndex)))**2
++              DO i = 1, nZ
++                SfcOptics%Emissivity(i,1) = (Emissivity(i,1)*(SIN2_Angle)) + &
++                                              (Emissivity(i,2)*(ONE-SIN2_Angle))
++                SfcOptics%Reflectivity(i,1,i,1) = (Reflectivity(i,1,i,1)*SIN2_Angle) + &
++                                                  (Reflectivity(i,2,i,2)*(ONE-SIN2_Angle))
++              END DO
++            
++            !
++            ! Description:
++            ! ============
++            ! Polarization changing with a defined polarization rotation angle 
++            ! as instrument zenith angle changes. Implemented for GEMS01 SmallSat.
++            !
++            CASE ( PRA_POLARIZATION )
++              DO i = 1, nZ
++                ! earth incidence angle (EIA):
++                phi = ASIN( GeometryInfo%Distance_Ratio * SIN(DEGREES_TO_RADIANS*SfcOptics%Angle(i)) )
++                ! Instrument offset angle: 
++                theta_f = DEGREES_TO_RADIANS*SC(SensorIndex)%PolAngle(ChannelIndex)
++                pv = SIN(phi) * ( COS(phi) + SIN(theta_f)*(1.0_fp - COS(phi))  ) &
++                   ! --------------------------------------------------------------
++                     / SQRT( SIN(phi)**2 + SIN(theta_f)**2*(1.0_fp - COS(phi)**2) )
++                ph = - ( SIN(phi)**2 - SIN(theta_f)*(1.0_fp - COS(phi))*COS(phi) ) &
++                   ! ---------------------------------------------------------------
++                     / SQRT( SIN(phi)**2 + SIN(theta_f)**2*(1.0_fp - COS(phi)**2) )
++                ! Sine square of Polarization Rotation Angle (PRA)
++                SIN2_Angle = SIN(ATAN( -pv/ph ))**2
++                SfcOptics%Emissivity(i,1) = (Emissivity(i,1)*(SIN2_Angle)) + &
++                                               (Emissivity(i,2)*(ONE-SIN2_Angle))
++                SfcOptics%Reflectivity(i,1,i,1) = (Reflectivity(i,1,i,1)*SIN2_Angle) + &
++                                                  (Reflectivity(i,2,i,2)*(ONE-SIN2_Angle))
++              END DO
++ 
+             ! Serious problem if we got to this points
+             CASE DEFAULT
+                Error_Status = FAILURE
+@@ -1193,6 +1254,10 @@ CONTAINS
+     INTEGER :: nL, nZ
+     INTEGER :: Polarization
+     REAL(fp) :: SIN2_Angle
++    REAL(fp) :: pv
++    REAL(fp) :: ph
++    REAL(fp) :: phi
++    REAL(fp) :: theta_f
+     REAL(fp), DIMENSION(SfcOptics%n_Angles,MAX_N_STOKES) :: Emissivity_TL
+     REAL(fp), DIMENSION(SfcOptics%n_Angles,MAX_N_STOKES, &
+                         SfcOptics%n_Angles,MAX_N_STOKES) :: Reflectivity_TL
+@@ -1424,6 +1489,17 @@ CONTAINS
+                                                      (Reflectivity_TL(i,2,i,2)*(ONE-SIN2_Angle))
+               END DO
+ 
++            ! Polarization mixing with constant offset angle for TROPICS
++            CASE ( CONST_MIXED_POLARIZATION )
++              SIN2_Angle = (GeometryInfo%Distance_Ratio * &
++                           SIN(DEGREES_TO_RADIANS*SC(SensorIndex)%PolAngle(ChannelIndex)))**2
++              DO i = 1, nZ
++                SfcOptics_TL%Emissivity(i,1) = (Emissivity_TL(i,1)*(SIN2_Angle)) + &
++                                                  (Emissivity_TL(i,2)*(ONE-SIN2_Angle))
++                SfcOptics_TL%Reflectivity(i,1,i,1) = (Reflectivity_TL(i,1,i,1)*SIN2_Angle) + &
++                                                     (Reflectivity_TL(i,2,i,2)*(ONE-SIN2_Angle))
++              END DO
++
+             ! Right circular polarisation
+             CASE ( RC_POLARIZATION )
+               SfcOptics_TL%Emissivity(1:nZ,1)          = Emissivity_TL(1:nZ,1)
+@@ -1434,6 +1510,32 @@ CONTAINS
+               SfcOptics_TL%Emissivity(1:nZ,1)          = Emissivity_TL(1:nZ,1)
+               SfcOptics_TL%Reflectivity(1:nZ,1,1:nZ,1) = Reflectivity_TL(1:nZ,1,1:nZ,1)
+ 
++            !
++            ! Description:
++            ! ============
++            ! Polarization changing with a defined polarization rotation angle 
++            ! as instrument zenith angle changes. Implemented for GEMS-1 SmallSat.
++            !
++            CASE ( PRA_POLARIZATION )
++              DO i = 1, nZ
++                ! earth incidence angle (EIA):
++                phi = ASIN( GeometryInfo%Distance_Ratio * SIN(DEGREES_TO_RADIANS*SfcOptics%Angle(i)) )
++                ! Instrument offset angle: 
++                theta_f = DEGREES_TO_RADIANS*SC(SensorIndex)%PolAngle(ChannelIndex)
++                pv = SIN(phi) * ( COS(phi) + SIN(theta_f)*(1.0_fp - COS(phi))  ) &
++                   ! --------------------------------------------------------------
++                     / SQRT( SIN(phi)**2 + SIN(theta_f)**2*(1.0_fp - COS(phi)**2) )
++                ph = - ( SIN(phi)**2 - SIN(theta_f)*(1.0_fp - COS(phi))*COS(phi) ) &
++                   ! ---------------------------------------------------------------
++                     / SQRT( SIN(phi)**2 + SIN(theta_f)**2*(1.0_fp - COS(phi)**2) )
++                ! Sine square of Polarization Rotation Angle (PRA)
++                SIN2_Angle = SIN(ATAN( -pv/ph ))**2
++                SfcOptics_TL%Emissivity(i,1) = (Emissivity_TL(i,1)*(SIN2_Angle)) + &
++                                               (Emissivity_TL(i,2)*(ONE-SIN2_Angle))
++                SfcOptics_TL%Reflectivity(i,1,i,1) = (Reflectivity_TL(i,1,i,1)*SIN2_Angle) + &
++                                                  (Reflectivity_TL(i,2,i,2)*(ONE-SIN2_Angle))
++	          END DO
++
+             ! Serious problem if we got to this point
+             CASE DEFAULT
+               Error_Status = FAILURE
+@@ -1770,6 +1872,8 @@ CONTAINS
+     INTEGER :: nL, nZ
+     INTEGER :: Polarization
+     REAL(fp) :: SIN2_Angle
++    REAL(fp) :: theta_f
++    REAL(fp) :: phi, ph, pv
+     REAL(fp), DIMENSION(SfcOptics%n_Angles,MAX_N_STOKES) :: Emissivity_AD
+     REAL(fp), DIMENSION(SfcOptics%n_Angles,MAX_N_STOKES, &
+                         SfcOptics%n_Angles,MAX_N_STOKES) :: Reflectivity_AD
+@@ -1916,6 +2020,22 @@ CONTAINS
+               SfcOptics_AD%Emissivity = ZERO
+               SfcOptics_AD%Reflectivity = ZERO
+ 
++            ! Polarization mixing with constant offset angle for TROPICS
++            CASE ( CONST_MIXED_POLARIZATION )
++              SIN2_Angle = (GeometryInfo%Distance_Ratio * &
++                           SIN(DEGREES_TO_RADIANS*SC(SensorIndex)%PolAngle(ChannelIndex)))**2
++              DO i = 1, nZ
++                ! PS: The adjoint is the transpose of the TL relationship:
++                ! eV_AD = e_AD * SIN^2(theta)
++                ! eH_AD = e_AD * COS^2(theta)
++                Emissivity_AD(i,1) = SfcOptics_AD%Emissivity(i,1)*SIN2_Angle
++                Emissivity_AD(i,2) = SfcOptics_AD%Emissivity(i,1)*(ONE-SIN2_Angle)
++                Reflectivity_AD(i,1,i,1) = SfcOptics_AD%Reflectivity(i,1,i,1)*SIN2_Angle
++                Reflectivity_AD(i,2,i,2) = SfcOptics_AD%Reflectivity(i,1,i,1)*(ONE-SIN2_Angle)
++              END DO
++              SfcOptics_AD%Emissivity   = ZERO
++              SfcOptics_AD%Reflectivity = ZERO
++
+             ! Right circular polarisation
+             CASE ( RC_POLARIZATION )
+               Emissivity_AD(1:nZ,1) = SfcOptics_AD%Emissivity(1:nZ,1)
+@@ -1930,6 +2050,37 @@ CONTAINS
+               Reflectivity_AD(1:nZ,1,1:nZ,1) = SfcOptics_AD%Reflectivity(1:nZ,1,1:nZ,1)
+               SfcOptics_AD%Reflectivity = ZERO
+ 
++            !
++            ! Description:
++            ! ============
++            ! Polarization changing with a defined polarization rotation angle 
++            ! as instrument zenith angle changes. Implemented for GEMS-1 SmallSat.
++            !
++            CASE ( PRA_POLARIZATION )
++              DO i = 1, nZ
++                ! earth incidence angle (EIA):
++                phi = ASIN( GeometryInfo%Distance_Ratio * SIN(DEGREES_TO_RADIANS*SfcOptics%Angle(i)) )
++                ! Instrument offset angle: 
++                theta_f = DEGREES_TO_RADIANS*SC(SensorIndex)%PolAngle(ChannelIndex)
++                pv = SIN(phi) * ( COS(phi) + SIN(theta_f)*(1.0_fp - COS(phi))  ) &
++                   ! --------------------------------------------------------------
++                     / SQRT( SIN(phi)**2 + SIN(theta_f)**2*(1.0_fp - COS(phi)**2) )
++                ph = - ( SIN(phi)**2 - SIN(theta_f)*(1.0_fp - COS(phi))*COS(phi) ) &
++                   ! ---------------------------------------------------------------
++                     / SQRT( SIN(phi)**2 + SIN(theta_f)**2*(1.0_fp - COS(phi)**2) )
++                ! Sine square of Polarization Rotation Angle (PRA)
++                SIN2_Angle = SIN(ATAN( -pv/ph ))**2
++                ! PS: The adjoint is the transpose of the TL relationship:
++                ! eV_AD = e_AD * SIN^2(theta)
++                ! eH_AD = e_AD * COS^2(theta)
++                Emissivity_AD(i,1) = SfcOptics_AD%Emissivity(i,1)*SIN2_Angle
++                Emissivity_AD(i,2) = SfcOptics_AD%Emissivity(i,1)*(ONE-SIN2_Angle)
++                Reflectivity_AD(i,1,i,1) = SfcOptics_AD%Reflectivity(i,1,i,1)*SIN2_Angle
++                Reflectivity_AD(i,2,i,2) = SfcOptics_AD%Reflectivity(i,1,i,1)*(ONE-SIN2_Angle)
++              END DO
++              SfcOptics_AD%Emissivity   = ZERO
++              SfcOptics_AD%Reflectivity = ZERO
++
+             ! Serious problem if we got to this point
+             CASE DEFAULT
+               Error_Status = FAILURE
+diff --git a/test/CMakeLists.txt b/test/CMakeLists.txt
+index 400b804e..f0729b02 100644
+--- a/test/CMakeLists.txt
++++ b/test/CMakeLists.txt
+@@ -52,7 +52,7 @@ if( DEFINED LOCAL_PATH_JEDI_TESTFILES )
+ else()
+   set( CRTM_COEFFS_PATH ${CMAKE_BINARY_DIR}/test_data/${REPO_VERSION})
+   file(MAKE_DIRECTORY ${CRTM_COEFFS_PATH})
+-  set( ECBUILD_DOWNLOAD_BASE_URL https://dashrepo.ucar.edu/dataset/147_miesch )
++  set( ECBUILD_DOWNLOAD_BASE_URL https://gdex.ucar.edu/dataset/147_miesch )
+   message(STATUS "download CRTM coeffs files from: ${ECBUILD_DOWNLOAD_BASE_URL}/file to ${CRTM_COEFFS_PATH}")
+   ecbuild_get_test_multidata( TARGET   get_crtm_coeffs
+                               NAMES    crtm_coefficients.tar.gz:dedd4b5ac0172934b90748b63ad62199
+-- 
+2.25.1
+

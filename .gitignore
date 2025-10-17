@@ -6,3 +6,10 @@
 *.mod
 log
 .DS_Store
+data/
+**/__pycache__
+**.tgz
+_skbuild/
+dist/
+*.egg-info
+testCases/*.png
