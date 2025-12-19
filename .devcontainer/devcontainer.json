@@ -2,6 +2,10 @@
     "name": "pycrtm",
     "build": {
         "dockerfile": "../Dockerfile",
+        "options": [
+            "--platform",
+            "linux/amd64"
+        ],
         "args": {
             "COEF_TAR": "fix_REL-2.4.0.tgz"
         }
