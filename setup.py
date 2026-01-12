@@ -37,7 +37,7 @@ def readSetup(setup_file, scriptDir):
     crtm_install = cfg['Setup']['crtm_install']
     coef_path = cfg['Coefficients']['source_path']
     coef_dest = cfg['Coefficients']['path_used']
-    link_coef = cfg['Setup']['link_from_source_to_path_used']
+    link_coef = cfg.getboolean('Setup','link_from_source_to_path_used')
     return coef_path, coef_dest, crtm_install, link_coef
 
 def linkCoef(coefDir,coefDest):
