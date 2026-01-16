@@ -13,3 +13,11 @@ _skbuild/
 dist/
 *.egg-info
 testCases/*.png
+
+.vscode-server
+.vscode/*
+!.vscode/launch.json
+
+.dotnet
+
+.ssh

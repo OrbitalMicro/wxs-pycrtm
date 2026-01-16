@@ -1,3 +1,5 @@
+[![Build and Publish Docker Images and Wheels](https://github.com/OrbitalMicro/wxs-pycrtm/actions/workflows/build-and-publish.yml/badge.svg)](https://github.com/OrbitalMicro/wxs-pycrtm/actions/workflows/build-and-publish.yml)
+
 # pyCRTM - python interface to CRTM.
 
 ## Bryan M. Karpowicz, Ph.D. - USRA/GESTAR/NASA 610.1 Global Modeling and Assimilation Office, with Contributions from Patrick Stegmann, Dr.-Ing. - JCSDA

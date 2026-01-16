@@ -1,0 +1,185 @@
+name: Build and Publish Docker Images and Wheels
+
+env:
+  PUBLISH_BRANCH: master
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+jobs:
+  build-crtm-builder:
+    name: Build CRTM Builder Image
+    runs-on: ubuntu-22.04-16core
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Extract version from pyproject.toml
+        id: get_version
+        run: |
+          VERSION=$(grep -m 1 '^version = ' pyproject.toml | cut -d '"' -f 2)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Extracted version: $VERSION"
+
+      - name: Check if version exists on GemFury
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          PACKAGE_NAME=$(grep -m 1 '^name = ' pyproject.toml | cut -d '"' -f 2)
+          
+          echo "Checking if $PACKAGE_NAME version $VERSION exists on GemFury..."
+          
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://orbitalmicro.fury.io/api/v1/versions?name=$PACKAGE_NAME&version=$VERSION")
+          
+          if [ "$RESPONSE" = "200" ]; then
+            echo "::error::Version $VERSION already exists on GemFury. Please bump the version in pyproject.toml before publishing."
+            exit 1
+          else
+            echo "Version $VERSION does not exist. Proceeding with build..."
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build crtm-builder image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: crtm-builder
+          cache-from: type=gha,scope=crtm-builder
+          cache-to: type=gha,mode=max,scope=crtm-builder
+          platforms: linux/amd64
+
+  build-pygems-base:
+    name: Build and Push pygems-base Docker Image
+    runs-on: ubuntu-22.04-16core
+    needs: build-crtm-builder
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to DockerHub
+        if: github.ref == format('refs/heads/{0}', env.PUBLISH_BRANCH)
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: orbitalmicro/pygems-base
+          tags: |
+            type=raw,value=${{ needs.build-crtm-builder.outputs.version }}
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push pygems-base image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: pygems-base
+          push: ${{ github.ref == format('refs/heads/{0}', env.PUBLISH_BRANCH) }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=crtm-builder
+          cache-to: type=gha,mode=max,scope=pygems-base
+          platforms: linux/amd64
+
+  build-wheel:
+    name: Build and Publish Python Wheel
+    runs-on: ${{ matrix.runner }}
+    needs: build-crtm-builder
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        runner: [ubuntu-22.04-16core]
+        python-version: ['3.10', '3.11', '3.12']
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build crtm-builder image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: crtm-builder
+          load: true
+          tags: crtm-builder:py${{ matrix.python-version }}
+          build-args: |
+            PYTHON_VERSION=${{ matrix.python-version }}
+          cache-from: type=gha,scope=crtm-builder-${{ matrix.python-version }}
+          platforms: linux/amd64
+
+      - name: Build wheel in container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/home/wxs/workspace \
+            -w /home/wxs/workspace \
+            --user $(id -u):$(id -g) \
+            crtm-builder:py${{ matrix.python-version }} \
+            bash -c "poetry build -f wheel"
+
+      - name: List built wheels
+        run: ls -lh dist/
+        shell: bash
+
+      - name: Upload wheel artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel-linux-py${{ matrix.python-version }}
+          path: dist/*.whl
+          retention-days: 30
+
+      - name: Install twine
+        if: github.ref == format('refs/heads/{0}', env.PUBLISH_BRANCH)
+        run: |
+          python -m pip install --upgrade pip
+          pip install twine
+
+      - name: Publish wheel to GemFury
+        if: github.ref == format('refs/heads/{0}', env.PUBLISH_BRANCH)
+        run: |
+          twine upload \
+            --repository-url https://push.fury.io/orbitalmicro/ \
+            --username ${{ secrets.GEMFURY_PUSH_TOKEN }} \
+            --password "" \
+            --non-interactive \
+            dist/*.whl
+
+      - name: Create and push git tag
+        if: github.ref == format('refs/heads/{0}', env.PUBLISH_BRANCH) && matrix.python-version == '3.12'
+        run: |
+          VERSION="${{ needs.build-crtm-builder.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "v$VERSION" -m "Release version $VERSION"
+          git push origin "v$VERSION"
